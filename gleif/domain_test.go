@@ -78,8 +78,8 @@ func TestIsLEI(t *testing.T) {
 	}{
 		{"HWUPKR0MPOU8FGXBT394", true},
 		{"EVK05KS7XY1DEII3R011", true},
-		{"hwupkr0mpou8fgxbt394", false}, // lowercase
-		{"HWUPKR0MPOU8FGXBT39", false},  // 19 chars
+		{"hwupkr0mpou8fgxbt394", false},  // lowercase
+		{"HWUPKR0MPOU8FGXBT39", false},   // 19 chars
 		{"HWUPKR0MPOU8FGXBT3945", false}, // 21 chars
 		{"Apple Inc", false},
 	}
