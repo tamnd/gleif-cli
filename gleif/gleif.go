@@ -1,38 +1,38 @@
 // Package gleif is the library behind the gleif command line:
-// the HTTP client, request shaping, and the typed data models for gleif.
+// the HTTP client, request shaping, and the typed data models for the GLEIF
+// LEI (Legal Entity Identifier) API.
 //
 // The Client here is the spine every command shares. It sets a real
 // User-Agent, paces requests so a busy session stays polite, and retries the
-// transient failures (429 and 5xx) that any public site throws under load.
-// Build your endpoint calls and JSON decoding on top of it.
+// transient failures (429 and 5xx) that any public API throws under load.
 package gleif
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
-	"strings"
+	"net/url"
+	"strconv"
 	"time"
 )
 
-// DefaultUserAgent identifies the client to gleif. A real, honest
-// User-Agent is both polite and the thing most likely to keep you unblocked.
-const DefaultUserAgent = "gleif/dev (+https://github.com/tamnd/gleif-cli)"
-
-// Host is the site this client talks to, and the host the URI driver in
-// domain.go claims. The scaffold points it at gleif.com; change it once you
-// know the real endpoints you want to read.
-const Host = "gleif.com"
+// Host is the API host this client talks to.
+const Host = "api.gleif.org"
 
 // BaseURL is the root every request is built from.
-const BaseURL = "https://" + Host
+const BaseURL = "https://api.gleif.org/api/v1"
 
-// Client talks to gleif over HTTP.
+// DefaultUserAgent identifies the client to GLEIF. An honest User-Agent is
+// both polite and the thing most likely to keep you unblocked.
+const DefaultUserAgent = "gleif-cli/0.1 (tamnd87@gmail.com)"
+
+// Client talks to the GLEIF API over HTTP.
 type Client struct {
 	HTTP      *http.Client
 	UserAgent string
+	BaseURL   string
 	// Rate is the minimum gap between requests. Zero means no pacing.
 	Rate    time.Duration
 	Retries int
@@ -40,21 +40,22 @@ type Client struct {
 	last time.Time
 }
 
-// NewClient returns a Client with sensible defaults: a 30s timeout, a 200ms
-// minimum gap between requests, and five retries on transient errors.
+// NewClient returns a Client with sensible defaults: a 15s timeout, a 200ms
+// minimum gap between requests, and three retries on transient errors.
 func NewClient() *Client {
 	return &Client{
-		HTTP:      &http.Client{Timeout: 30 * time.Second},
+		HTTP:      &http.Client{Timeout: 15 * time.Second},
 		UserAgent: DefaultUserAgent,
+		BaseURL:   BaseURL,
 		Rate:      200 * time.Millisecond,
-		Retries:   5,
+		Retries:   3,
 	}
 }
 
-// Get fetches url and returns the response body. It paces and retries according
+// Get fetches u and returns the response body. It paces and retries according
 // to the client's settings. The caller owns nothing extra; the body is read
 // fully and closed here.
-func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
+func (c *Client) Get(ctx context.Context, u string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.Retries; attempt++ {
 		if attempt > 0 {
@@ -64,7 +65,7 @@ func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 			case <-time.After(backoff(attempt)):
 			}
 		}
-		body, retry, err := c.do(ctx, url)
+		body, retry, err := c.do(ctx, u)
 		if err == nil {
 			return body, nil
 		}
@@ -73,16 +74,17 @@ func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("get %s: %w", url, lastErr)
+	return nil, fmt.Errorf("get %s: %w", u, lastErr)
 }
 
-func (c *Client) do(ctx context.Context, url string) (body []byte, retry bool, err error) {
+func (c *Client) do(ctx context.Context, u string) (body []byte, retry bool, err error) {
 	c.pace()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, false, err
 	}
 	req.Header.Set("User-Agent", c.UserAgent)
+	req.Header.Set("Accept", "application/vnd.api+json")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -92,6 +94,9 @@ func (c *Client) do(ctx context.Context, url string) (body []byte, retry bool, e
 
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 		return nil, true, fmt.Errorf("http %d", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, fmt.Errorf("not found")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, false, fmt.Errorf("http %d", resp.StatusCode)
@@ -123,78 +128,162 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
-// Page is the scaffold's one example record: a single page, addressed by the
-// path that names it on gleif.com. It is a stand-in for the typed records you
-// will model from the real gleif endpoints. The kit struct tags make it
-// addressable as a resource URI (see domain.go): ID is the URI id, and Body is
-// the long text `gleif cat` and the Markdown export print.
-type Page struct {
-	ID    string `json:"id" kit:"id"`
-	URL   string `json:"url"`
-	Title string `json:"title,omitempty"`
-	Body  string `json:"body,omitempty" kit:"body"`
+// --- Entity: the canonical output type ---
+
+// Entity is one legal entity record from the GLEIF LEI registry.
+type Entity struct {
+	LEI         string `kit:"id" json:"lei"`
+	Name        string `json:"name"`
+	Country     string `json:"country"`
+	Region      string `json:"region"`
+	City        string `json:"city"`
+	Jurisdiction string `json:"jurisdiction"`
+	Category    string `json:"category"`
+	Status      string `json:"status"`
+	InitialDate string `json:"initial_date"`
+	LastUpdate  string `json:"last_update"`
+	NextRenewal string `json:"next_renewal"`
 }
 
-// GetPage fetches one page by its path (for example "wiki/Go") and returns it as
-// a record. The scaffold keeps a plain-text preview of the response as the body;
-// replace the parsing with the real fields once you know the endpoint's shape.
-func (c *Client) GetPage(ctx context.Context, path string) (*Page, error) {
-	path = strings.Trim(path, "/")
-	url := BaseURL + "/" + path
-	body, err := c.Get(ctx, url)
+// --- Wire types (JSON API format) ---
+
+type wireListResp struct {
+	Data []wireRecord `json:"data"`
+}
+
+type wireSingleResp struct {
+	Data wireRecord `json:"data"`
+}
+
+type wireRecord struct {
+	ID         string         `json:"id"`
+	Attributes wireAttributes `json:"attributes"`
+}
+
+type wireAttributes struct {
+	LEI          string    `json:"lei"`
+	Entity       wireEntity `json:"entity"`
+	Registration wireReg   `json:"registration"`
+}
+
+type wireEntity struct {
+	LegalName    wireName `json:"legalName"`
+	LegalAddress wireAddr `json:"legalAddress"`
+	Jurisdiction string   `json:"jurisdiction"`
+	Category     string   `json:"category"`
+}
+
+type wireName struct {
+	Name string `json:"name"`
+}
+
+type wireAddr struct {
+	Country string `json:"country"`
+	Region  string `json:"region"`
+	City    string `json:"city"`
+}
+
+type wireReg struct {
+	Status                  string `json:"status"`
+	InitialRegistrationDate string `json:"initialRegistrationDate"`
+	LastUpdateDate          string `json:"lastUpdateDate"`
+	NextRenewalDate         string `json:"nextRenewalDate"`
+}
+
+func toEntity(r wireRecord) Entity {
+	attr := r.Attributes
+	return Entity{
+		LEI:         attr.LEI,
+		Name:        attr.Entity.LegalName.Name,
+		Country:     attr.Entity.LegalAddress.Country,
+		Region:      attr.Entity.LegalAddress.Region,
+		City:        attr.Entity.LegalAddress.City,
+		Jurisdiction: attr.Entity.Jurisdiction,
+		Category:    attr.Entity.Category,
+		Status:      attr.Registration.Status,
+		InitialDate: dateOnly(attr.Registration.InitialRegistrationDate),
+		LastUpdate:  dateOnly(attr.Registration.LastUpdateDate),
+		NextRenewal: dateOnly(attr.Registration.NextRenewalDate),
+	}
+}
+
+func dateOnly(s string) string {
+	if len(s) >= 10 {
+		return s[:10]
+	}
+	return s
+}
+
+// --- API methods ---
+
+// Search searches for entities by full-text query.
+func (c *Client) Search(ctx context.Context, query string, pageSize, page int) ([]Entity, error) {
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	if page <= 0 {
+		page = 1
+	}
+	params := url.Values{}
+	params.Set("filter[fulltext]", query)
+	params.Set("page[size]", strconv.Itoa(pageSize))
+	params.Set("page[number]", strconv.Itoa(page))
+	u := c.BaseURL + "/lei-records?" + params.Encode()
+
+	body, err := c.Get(ctx, u)
 	if err != nil {
 		return nil, err
 	}
-	return &Page{ID: path, URL: url, Title: path, Body: pageText(body)}, nil
-}
 
-// PageLinks fetches a page and returns the same-host pages it links to, as page
-// stubs. It shows the member-listing pattern the URI driver relies on: every
-// stub carries enough (an id and a URL) to be addressed and followed on its own.
-func (c *Client) PageLinks(ctx context.Context, path string, limit int) ([]*Page, error) {
-	path = strings.Trim(path, "/")
-	body, err := c.Get(ctx, BaseURL+"/"+path)
-	if err != nil {
-		return nil, err
+	var resp wireListResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
 	}
-	var out []*Page
-	seen := map[string]bool{}
-	for _, p := range linkPaths(body) {
-		if seen[p] {
-			continue
-		}
-		seen[p] = true
-		out = append(out, &Page{ID: p, URL: BaseURL + "/" + p})
-		if limit > 0 && len(out) >= limit {
-			break
-		}
+
+	out := make([]Entity, 0, len(resp.Data))
+	for _, r := range resp.Data {
+		out = append(out, toEntity(r))
 	}
 	return out, nil
 }
 
-var (
-	hrefRE = regexp.MustCompile(`href="(/[^":#?]+)"`)
-	tagRE  = regexp.MustCompile(`<[^>]+>`)
-)
-
-// linkPaths pulls the relative link targets out of an HTML response, so a list
-// op can turn each into an addressable page stub.
-func linkPaths(body []byte) []string {
-	var out []string
-	for _, m := range hrefRE.FindAllSubmatch(body, -1) {
-		if p := strings.Trim(string(m[1]), "/"); p != "" {
-			out = append(out, p)
-		}
+// GetByLEI fetches a single entity by its LEI code.
+func (c *Client) GetByLEI(ctx context.Context, lei string) (*Entity, error) {
+	u := c.BaseURL + "/lei-records/" + url.PathEscape(lei)
+	body, err := c.Get(ctx, u)
+	if err != nil {
+		return nil, err
 	}
-	return out
+
+	var resp wireSingleResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	e := toEntity(resp.Data)
+	return &e, nil
 }
 
-// pageText reduces an HTML response to a short plain-text preview, a stand-in
-// for the typed extract a real endpoint would hand you.
-func pageText(body []byte) string {
-	s := strings.Join(strings.Fields(tagRE.ReplaceAllString(string(body), " ")), " ")
-	if len(s) > 500 {
-		s = s[:500]
+// SearchByName searches for entities by exact legal name.
+func (c *Client) SearchByName(ctx context.Context, name string) ([]Entity, error) {
+	params := url.Values{}
+	params.Set("filter[entity.legalName]", name)
+	params.Set("page[size]", "10")
+	u := c.BaseURL + "/lei-records?" + params.Encode()
+
+	body, err := c.Get(ctx, u)
+	if err != nil {
+		return nil, err
 	}
-	return s
+
+	var resp wireListResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	out := make([]Entity, 0, len(resp.Data))
+	for _, r := range resp.Data {
+		out = append(out, toEntity(r))
+	}
+	return out, nil
 }
