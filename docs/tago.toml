@@ -1,0 +1,10 @@
+title       = "gleif"
+baseURL     = "https://gleif-cli.tamnd.com/"
+description = "A command line for gleif."
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/gleif-cli"
