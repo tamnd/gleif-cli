@@ -132,17 +132,17 @@ func backoff(attempt int) time.Duration {
 
 // Entity is one legal entity record from the GLEIF LEI registry.
 type Entity struct {
-	LEI         string `kit:"id" json:"lei"`
-	Name        string `json:"name"`
-	Country     string `json:"country"`
-	Region      string `json:"region"`
-	City        string `json:"city"`
+	LEI          string `kit:"id" json:"lei"`
+	Name         string `json:"name"`
+	Country      string `json:"country"`
+	Region       string `json:"region"`
+	City         string `json:"city"`
 	Jurisdiction string `json:"jurisdiction"`
-	Category    string `json:"category"`
-	Status      string `json:"status"`
-	InitialDate string `json:"initial_date"`
-	LastUpdate  string `json:"last_update"`
-	NextRenewal string `json:"next_renewal"`
+	Category     string `json:"category"`
+	Status       string `json:"status"`
+	InitialDate  string `json:"initial_date"`
+	LastUpdate   string `json:"last_update"`
+	NextRenewal  string `json:"next_renewal"`
 }
 
 // --- Wire types (JSON API format) ---
@@ -161,9 +161,9 @@ type wireRecord struct {
 }
 
 type wireAttributes struct {
-	LEI          string    `json:"lei"`
+	LEI          string     `json:"lei"`
 	Entity       wireEntity `json:"entity"`
-	Registration wireReg   `json:"registration"`
+	Registration wireReg    `json:"registration"`
 }
 
 type wireEntity struct {
@@ -193,17 +193,17 @@ type wireReg struct {
 func toEntity(r wireRecord) Entity {
 	attr := r.Attributes
 	return Entity{
-		LEI:         attr.LEI,
-		Name:        attr.Entity.LegalName.Name,
-		Country:     attr.Entity.LegalAddress.Country,
-		Region:      attr.Entity.LegalAddress.Region,
-		City:        attr.Entity.LegalAddress.City,
+		LEI:          attr.LEI,
+		Name:         attr.Entity.LegalName.Name,
+		Country:      attr.Entity.LegalAddress.Country,
+		Region:       attr.Entity.LegalAddress.Region,
+		City:         attr.Entity.LegalAddress.City,
 		Jurisdiction: attr.Entity.Jurisdiction,
-		Category:    attr.Entity.Category,
-		Status:      attr.Registration.Status,
-		InitialDate: dateOnly(attr.Registration.InitialRegistrationDate),
-		LastUpdate:  dateOnly(attr.Registration.LastUpdateDate),
-		NextRenewal: dateOnly(attr.Registration.NextRenewalDate),
+		Category:     attr.Entity.Category,
+		Status:       attr.Registration.Status,
+		InitialDate:  dateOnly(attr.Registration.InitialRegistrationDate),
+		LastUpdate:   dateOnly(attr.Registration.LastUpdateDate),
+		NextRenewal:  dateOnly(attr.Registration.NextRenewalDate),
 	}
 }
 
